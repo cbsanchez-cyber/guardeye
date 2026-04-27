@@ -12,6 +12,7 @@ export const LiveMonitoring = () => {
 
   const [alerts, setAlerts] = useState<any[]>([]);
   const [session, setSession] = useState<any>(null);
+  const sessionRef = useRef<any>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ending, setEnding] = useState(false);
@@ -58,24 +59,33 @@ export const LiveMonitoring = () => {
              localStorage.setItem(`session_${sessionId}_elapsed`, next.toString());
              localStorage.setItem(`session_${sessionId}_lastUpdate`, now.toString());
           }
+
+          // Auto-end session if time limit reached
+          const currentSession = sessionRef.current;
+          if (currentSession && currentSession.timeLimit && currentSession.timeLimit > 0 && next >= currentSession.timeLimit * 60) {
+             // Let the effect clean up on the next render, but trigger the end right now
+             supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId).then(() => {
+                 localStorage.removeItem(`session_${sessionId}_elapsed`);
+                 localStorage.removeItem(`session_${sessionId}_paused`);
+                 localStorage.removeItem(`session_${sessionId}_lastUpdate`);
+                 toast.success("Time limit reached. Session completed.");
+                 navigate('/dashboard/records');
+             });
+          }
+
           return next;
         });
       }
     }, 1000);
 
-    // Start simulation when component mounts
-
-    // Using mock simulation for UI since hardware isn't attached
-    const simInterval = setInterval(() => {
-       if (isPausedRef.current) return;
-       // Mock data insertion into supabase would happen by a real Pi device.
-    }, Math.random() * 5000 + 5000);
-
     // Fetch session details
     const fetchSession = async () => {
       try {
         const { data } = await supabase.from('sessions').select('*').eq('id', sessionId).single();
-        if (data) setSession(data);
+        if (data) {
+           setSession(data);
+           sessionRef.current = data;
+        }
       } catch (e) {
         console.error(e);
       }
@@ -93,14 +103,13 @@ export const LiveMonitoring = () => {
       }
     };
 
-    // initial fetch
+    // Initial fetch
     fetchAlerts().then(() => setLoading(false));
 
     const interval = setInterval(fetchAlerts, 5000);
 
     return () => {
       clearInterval(interval);
-      clearInterval(simInterval);
       clearInterval(timerInterval);
     };
   }, [sessionId, navigate]);

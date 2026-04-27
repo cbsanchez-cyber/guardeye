@@ -27,7 +27,7 @@ export const StartSession = () => {
         .from('sessions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'upcoming')
+        .in('status', ['upcoming', 'active'])
         .order('date', { ascending: true })
         .order('startTime', { ascending: true });
 
@@ -96,8 +96,13 @@ export const StartSession = () => {
                     <Server className="w-5 h-5 text-blue-600" />
                   </div>
                   <div className="min-w-0 flex-auto">
-                    <p className="text-sm font-semibold leading-6 text-slate-800">
+                    <p className="text-sm font-semibold leading-6 text-slate-800 flex items-center gap-2">
                       {session.name}
+                      {session.status === 'active' && (
+                        <span className="inline-flex items-center rounded-md bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                          Active
+                        </span>
+                      )}
                     </p>
                     <p className="mt-1 flex text-xs leading-5 text-slate-500">
                       {format(new Date(session.date), 'MMM d, yyyy')} • {session.startTime} • {session.timeLimit} mins • {session.room}
@@ -105,13 +110,23 @@ export const StartSession = () => {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-x-4">
-                  <button
-                    onClick={() => handleStartClick(session)}
-                    className="hidden sm:flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors"
-                  >
-                    <Play className="w-4 h-4 text-blue-600" />
-                    Start Session
-                  </button>
+                  {session.status === 'active' ? (
+                    <button
+                      onClick={() => navigate(`/dashboard/monitoring?sessionId=${session.id}`)}
+                      className="hidden sm:flex items-center gap-2 rounded-lg bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 shadow-sm border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                    >
+                      <Play className="w-4 h-4 text-emerald-600" />
+                      Resume Session
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleStartClick(session)}
+                      className="hidden sm:flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                    >
+                      <Play className="w-4 h-4 text-blue-600" />
+                      Start Session
+                    </button>
+                  )}
                 </div>
               </li>
             ))
