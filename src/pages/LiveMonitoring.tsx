@@ -1,0 +1,228 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import api, { simulatePiAlerts } from '../api';
+import { toast } from 'sonner';
+import { ShieldCheck, Pause, Play, Square, Activity } from 'lucide-react';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+
+export const LiveMonitoring = () => {
+  const [searchParams] = useSearchParams();
+  const sessionId = searchParams.get('sessionId');
+  const navigate = useNavigate();
+
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [session, setSession] = useState<any>(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [ending, setEnding] = useState(false);
+
+  // Use refs to hold state inside interval without complex dependencies
+  const isPausedRef = useRef(isPaused);
+  isPausedRef.current = isPaused;
+
+  useEffect(() => {
+    if (!sessionId) {
+      navigate('/dashboard/schedule');
+      return;
+    }
+
+    // Start simulation when component mounts
+    const simInterval = simulatePiAlerts(sessionId);
+
+    // Fetch session details
+    const fetchSession = async () => {
+      try {
+        const res = await api.get(`/sessions/${sessionId}`);
+        setSession(res.data);
+      } catch (e) {
+        // handle error silently or just continue
+      }
+    };
+    fetchSession();
+
+    // Polling logic
+    const fetchAlerts = async () => {
+      if (isPausedRef.current) return;
+      try {
+        const res = await api.get(`/sessions/${sessionId}/alerts`);
+        setAlerts(res.data);
+      } catch (e) {
+         // silently fail polling
+      }
+    };
+
+    // initial fetch
+    fetchAlerts().then(() => setLoading(false));
+
+    const interval = setInterval(fetchAlerts, 5000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(simInterval);
+    };
+  }, [sessionId, navigate]);
+
+  const handleEndSession = async () => {
+     if (!window.confirm("Are you sure you want to end this monitoring session?")) return;
+     setEnding(true);
+     try {
+         await api.post(`/sessions/${sessionId}/end`);
+         toast.success("Session completed");
+         navigate('/dashboard/records');
+     } catch (error) {
+         toast.error("Failed to end session");
+         setEnding(false);
+     }
+  };
+
+  if (loading) return <div className="flex justify-center py-12"><LoadingSpinner className="w-8 h-8 text-blue-600" /></div>;
+
+  const latestAlertsByStudent = alerts.reduce((acc, alert) => {
+    if (!acc[alert.studentId] || new Date(alert.timestamp).getTime() > new Date(acc[alert.studentId].timestamp).getTime()) {
+      acc[alert.studentId] = alert;
+    }
+    return acc;
+  }, {} as Record<string, any>);
+
+  const students = Array.from({length: 5}, (_, i) => `Student_${i + 1}`).map(studentId => {
+    const latestAlert = latestAlertsByStudent[studentId];
+    const isRecent = latestAlert && (new Date().getTime() - new Date(latestAlert.timestamp).getTime() < 15000); // Consider normal if older than 15s
+    
+    return {
+      studentId,
+      status: isRecent ? latestAlert.behaviorType : 'Normal',
+      riskScore: isRecent ? latestAlert.riskScore : 0,
+      timestamp: isRecent ? latestAlert.timestamp : null,
+    };
+  });
+
+  return (
+    <div className="flex flex-col h-full gap-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Active Session Monitoring</h1>
+          <p className="text-sm text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+            Session ID: {sessionId} &bull; 
+            {session?.timeLimit && (
+              <>Time Limit: {session.timeLimit} mins &bull;</>
+            )}
+            <span className="bg-emerald-50 text-emerald-600 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-emerald-100 flex items-center gap-1.5">
+               <span className={`relative flex h-1.5 w-1.5`}>
+                  {!isPaused && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${isPaused ? 'bg-slate-400' : 'bg-emerald-500'}`}></span>
+               </span>
+               LIVE
+            </span>
+          </p>
+        </div>
+        
+        <div className="flex items-center gap-3">
+           <button
+             onClick={() => setIsPaused(!isPaused)}
+             className="inline-flex items-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+           >
+             {isPaused ? <Play className="w-4 h-4 text-emerald-600" /> : <Pause className="w-4 h-4 text-slate-600" />}
+             {isPaused ? 'Resume' : 'Pause'}
+           </button>
+           <button
+             onClick={handleEndSession}
+             disabled={ending}
+             className="inline-flex items-center gap-2 rounded-lg bg-red-500 px-4 py-2 text-sm font-bold text-white shadow hover:bg-red-600 active:scale-[0.98] transition-all"
+           >
+             {ending ? <LoadingSpinner className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+             End Session
+           </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1 min-h-0 pb-4">
+        {/* Left: Camera Feed */}
+        <div className="col-span-1 lg:col-span-2 flex flex-col bg-slate-900 rounded-[16px] overflow-hidden relative shadow-sm border-slate-800 shrink-0 min-h-[400px] lg:min-h-0 lg:h-[calc(100vh-14rem)]">
+           <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-black/60 backdrop-blur-md text-white text-xs font-semibold px-3 py-1.5 rounded-lg border border-white/10 shadow-lg">
+              <span className="relative flex h-2 w-2">
+                 {!isPaused && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75"></span>}
+                 <span className={`relative inline-flex rounded-full h-2 w-2 ${isPaused ? 'bg-slate-500' : 'bg-red-500'}`}></span>
+              </span>
+              Raspberry Pi 5 Hub (Cam 01)
+           </div>
+           
+           {isPaused ? (
+              <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 bg-slate-900">
+                 <Pause className="w-12 h-12 mb-3 opacity-50" />
+                 <p className="font-medium text-lg">Stream Paused</p>
+                 <p className="text-sm text-slate-500 mt-1">Live feed will resume when unpaused</p>
+              </div>
+           ) : (
+              <div className="w-full h-full relative select-none bg-slate-800 overflow-hidden flex items-center justify-center group">
+                 <video 
+                    autoPlay 
+                    loop 
+                    muted 
+                    playsInline 
+                    src="https://cdn.coverr.co/videos/coverr-students-listening-in-a-university-lecture-3059/1080p.mp4"
+                    className="w-full h-full object-cover opacity-[0.85] mix-blend-luminosity "
+                 />
+                 {/* Simulated AI Overlays */}
+                 <div className="absolute inset-0 pointer-events-none">
+                    <div className="absolute top-[30%] left-[40%] w-[12%] h-[20%] border-[1.5px] border-emerald-400/80 rounded bg-emerald-400/10 transition-all duration-1000 ease-in-out hidden sm:block">
+                        <span className="absolute -top-5 left-0 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">ID: 42 (Student)</span>
+                    </div>
+                    <div className="absolute top-[25%] left-[65%] w-[10%] h-[18%] border-[1.5px] border-emerald-400/80 rounded bg-emerald-400/10 transition-all duration-1000 ease-in-out hidden sm:block">
+                        <span className="absolute -top-5 left-0 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">ID: 87 (Student)</span>
+                    </div>
+                    {/* Active Alert Overlay */}
+                    {students.some(s => s.status !== 'Normal') && (
+                        <div className="absolute top-[45%] left-[25%] w-[14%] h-[19%] border-[1.5px] border-red-500/90 rounded bg-red-500/20 animate-pulse hidden sm:block shadow-[0_0_15px_rgba(239,68,68,0.3)]">
+                            <span className="absolute -top-5 left-0 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">Suspicious Activity Detected</span>
+                        </div>
+                    )}
+                 </div>
+                 {/* Scanning line animation */}
+                 <div className="absolute left-0 right-0 h-1.5 bg-gradient-to-b from-transparent to-emerald-500/40 blur-[1px] animate-scan" style={{ top: 0 }} />
+              </div>
+           )}
+        </div>
+
+        {/* Right: Detected Students */}
+        <div className="col-span-1 lg:col-span-1 flex flex-col bg-white rounded-[16px] border border-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.05)] overflow-hidden lg:h-[calc(100vh-14rem)] min-h-[400px]">
+           <div className="p-4 px-5 border-b border-slate-100 flex justify-between items-center bg-white shrink-0">
+              <h2 className="text-base font-semibold text-slate-800">Detected Students</h2>
+              <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded-md font-medium border border-slate-100">{students.length} Active</span>
+           </div>
+           
+           <div className="overflow-y-auto flex-1 p-4">
+             <div className="flex flex-col gap-3">
+               {students.map(student => (
+                 <div key={student.studentId} className="p-3 border border-slate-100 rounded-[12px] bg-white shadow-sm flex items-center justify-between transition-colors">
+                   <div className="flex items-center gap-3">
+                     <div className="w-10 h-10 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center font-semibold text-slate-600 shrink-0">
+                        {student.studentId.replace('Student_', 'S')}
+                     </div>
+                     <div className="min-w-0 pr-2">
+                        <p className="text-sm font-semibold text-slate-800 truncate">{student.studentId}</p>
+                        <p className="text-xs mt-0.5 truncate">
+                           <span className="text-slate-500 font-medium">Status: </span>
+                           <span className={`font-semibold ${student.status !== 'Normal' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                             {student.status}
+                           </span>
+                        </p>
+                     </div>
+                   </div>
+                   {student.status !== 'Normal' && (
+                     <div className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-bold border ${
+                         student.riskScore >= 0.75 ? 'text-red-700 bg-red-50 border-red-200' : 
+                         student.riskScore >= 0.25 ? 'text-amber-700 bg-amber-50 border-amber-200' :
+                         'text-blue-700 bg-blue-50 border-blue-200'
+                     }`}>
+                        {(student.riskScore * 100).toFixed(0)}% Risk
+                     </div>
+                   )}
+                 </div>
+               ))}
+             </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+};
