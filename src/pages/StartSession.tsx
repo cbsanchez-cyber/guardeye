@@ -61,6 +61,10 @@ export const StartSession = () => {
         
       if (error) throw error;
       
+      localStorage.setItem(`session_${selectedSession.id}_elapsed`, '0');
+      localStorage.setItem(`session_${selectedSession.id}_paused`, 'false');
+      localStorage.setItem(`session_${selectedSession.id}_lastUpdate`, Date.now().toString());
+      
       toast.success('Session started');
       navigate(`/dashboard/monitoring?sessionId=${selectedSession.id}`);
     } catch (error) {

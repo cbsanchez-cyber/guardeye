@@ -15,6 +15,7 @@ export const LiveMonitoring = () => {
   const [isPaused, setIsPaused] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ending, setEnding] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // Use refs to hold state inside interval without complex dependencies
   const isPausedRef = useRef(isPaused);
@@ -26,7 +27,44 @@ export const LiveMonitoring = () => {
       return;
     }
 
+    // Initialize time tracking
+    const storedElapsed = localStorage.getItem(`session_${sessionId}_elapsed`);
+    const storedPaused = localStorage.getItem(`session_${sessionId}_paused`);
+    const storedLastUpdate = localStorage.getItem(`session_${sessionId}_lastUpdate`);
+    
+    let initialElapsed = storedElapsed ? parseInt(storedElapsed, 10) : 0;
+    const isPausedLocal = storedPaused === 'true';
+    
+    if (storedLastUpdate && !isPausedLocal) {
+        const missed = Math.floor((Date.now() - parseInt(storedLastUpdate, 10)) / 1000);
+        initialElapsed += missed;
+    }
+    
+    setElapsedSeconds(initialElapsed);
+    setIsPaused(isPausedLocal);
+    isPausedRef.current = isPausedLocal;
+
+    const timerInterval = setInterval(() => {
+      if (!isPausedRef.current) {
+        setElapsedSeconds(() => {
+          const storedElapsed = parseInt(localStorage.getItem(`session_${sessionId}_elapsed`) || '0', 10);
+          const storedLast = parseInt(localStorage.getItem(`session_${sessionId}_lastUpdate`) || Date.now().toString(), 10);
+          const now = Date.now();
+          const diff = Math.floor((now - storedLast) / 1000);
+          
+          let next = storedElapsed;
+          if (diff >= 1) {
+             next = storedElapsed + diff;
+             localStorage.setItem(`session_${sessionId}_elapsed`, next.toString());
+             localStorage.setItem(`session_${sessionId}_lastUpdate`, now.toString());
+          }
+          return next;
+        });
+      }
+    }, 1000);
+
     // Start simulation when component mounts
+
     // Using mock simulation for UI since hardware isn't attached
     const simInterval = setInterval(() => {
        if (isPausedRef.current) return;
@@ -63,6 +101,7 @@ export const LiveMonitoring = () => {
     return () => {
       clearInterval(interval);
       clearInterval(simInterval);
+      clearInterval(timerInterval);
     };
   }, [sessionId, navigate]);
 
@@ -72,6 +111,11 @@ export const LiveMonitoring = () => {
      try {
          const { error } = await supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId);
          if (error) throw error;
+         
+         localStorage.removeItem(`session_${sessionId}_elapsed`);
+         localStorage.removeItem(`session_${sessionId}_paused`);
+         localStorage.removeItem(`session_${sessionId}_lastUpdate`);
+         
          toast.success("Session completed");
          navigate('/dashboard/records');
      } catch (error) {
@@ -102,6 +146,24 @@ export const LiveMonitoring = () => {
     };
   });
 
+  const formatTime = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    if (hours > 0) {
+        return `${hours}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  const togglePause = () => {
+     const nextPaused = !isPaused;
+     setIsPaused(nextPaused);
+     isPausedRef.current = nextPaused;
+     localStorage.setItem(`session_${sessionId}_paused`, nextPaused.toString());
+     localStorage.setItem(`session_${sessionId}_lastUpdate`, Date.now().toString());
+  };
+
   return (
     <div className="flex flex-col h-full gap-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -112,6 +174,7 @@ export const LiveMonitoring = () => {
             {session?.timeLimit && (
               <>Time Limit: {session.timeLimit} mins &bull;</>
             )}
+            Elapsed: <span className="font-mono text-slate-700 font-semibold">{formatTime(elapsedSeconds)}</span> &bull;
             <span className="bg-emerald-50 text-emerald-600 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-emerald-100 flex items-center gap-1.5">
                <span className={`relative flex h-1.5 w-1.5`}>
                   {!isPaused && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
@@ -124,7 +187,7 @@ export const LiveMonitoring = () => {
         
         <div className="flex items-center gap-3">
            <button
-             onClick={() => setIsPaused(!isPaused)}
+             onClick={togglePause}
              className="inline-flex items-center gap-2 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-slate-600 shadow-sm border border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors"
            >
              {isPaused ? <Play className="w-4 h-4 text-emerald-600" /> : <Pause className="w-4 h-4 text-slate-600" />}
