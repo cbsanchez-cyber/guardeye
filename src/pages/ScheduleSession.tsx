@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Clock, MapPin, Calendar, FileText } from 'lucide-react';
-import api from '../api';
+import { supabase } from '../supabaseClient';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
 export const ScheduleSession = () => {
@@ -12,10 +12,21 @@ export const ScheduleSession = () => {
   const onSubmit = async (data: any) => {
     setIsLoading(true);
     try {
-      await api.post('/sessions', data);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { error } = await supabase.from('sessions').insert([{
+        ...data,
+        user_id: user.id,
+        status: 'upcoming'
+      }]);
+
+      if (error) throw error;
+
       toast.success('Session scheduled successfully');
       reset();
     } catch (error) {
+      console.error(error);
       toast.error('Failed to schedule session');
     } finally {
       setIsLoading(false);

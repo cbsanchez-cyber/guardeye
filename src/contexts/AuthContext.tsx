@@ -30,7 +30,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        setUser({ id: session.user.id, email: session.user.email || '' });
+        setUser({ 
+          id: session.user.id, 
+          email: session.user.email || '', 
+          name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || '' 
+        });
       } else {
         setUser(null);
       }
@@ -41,7 +45,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (session) {
-          setUser({ id: session.user.id, email: session.user.email || '' });
+          setUser({ 
+            id: session.user.id, 
+            email: session.user.email || '', 
+            name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || ''
+          });
         } else {
           setUser(null);
         }
@@ -54,7 +62,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const login = (token: string, user: any) => {
     // Session is handled by onAuthStateChange, but we keep this for backwards compatibility
-    setUser({ id: user.id, email: user.email });
+    setUser({ 
+      id: user.id, 
+      email: user.email, 
+      name: user.user_metadata?.full_name || user.user_metadata?.name || ''
+    });
   };
 
   const logout = async () => {

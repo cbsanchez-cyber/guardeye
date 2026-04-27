@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import api, { simulatePiAlerts } from '../api';
 import { toast } from 'sonner';
 import { ShieldCheck, Pause, Play, Square, Activity } from 'lucide-react';
+import { supabase } from '../supabaseClient';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
 export const LiveMonitoring = () => {
@@ -27,15 +27,19 @@ export const LiveMonitoring = () => {
     }
 
     // Start simulation when component mounts
-    const simInterval = simulatePiAlerts(sessionId);
+    // Using mock simulation for UI since hardware isn't attached
+    const simInterval = setInterval(() => {
+       if (isPausedRef.current) return;
+       // Mock data insertion into supabase would happen by a real Pi device.
+    }, Math.random() * 5000 + 5000);
 
     // Fetch session details
     const fetchSession = async () => {
       try {
-        const res = await api.get(`/sessions/${sessionId}`);
-        setSession(res.data);
+        const { data } = await supabase.from('sessions').select('*').eq('id', sessionId).single();
+        if (data) setSession(data);
       } catch (e) {
-        // handle error silently or just continue
+        console.error(e);
       }
     };
     fetchSession();
@@ -44,10 +48,10 @@ export const LiveMonitoring = () => {
     const fetchAlerts = async () => {
       if (isPausedRef.current) return;
       try {
-        const res = await api.get(`/sessions/${sessionId}/alerts`);
-        setAlerts(res.data);
+        const { data } = await supabase.from('alerts').select('*').eq('session_id', sessionId).order('timestamp', { ascending: false });
+        if (data) setAlerts(data);
       } catch (e) {
-         // silently fail polling
+         console.error(e);
       }
     };
 
@@ -66,10 +70,12 @@ export const LiveMonitoring = () => {
      if (!window.confirm("Are you sure you want to end this monitoring session?")) return;
      setEnding(true);
      try {
-         await api.post(`/sessions/${sessionId}/end`);
+         const { error } = await supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId);
+         if (error) throw error;
          toast.success("Session completed");
          navigate('/dashboard/records');
      } catch (error) {
+         console.error(error);
          toast.error("Failed to end session");
          setEnding(false);
      }

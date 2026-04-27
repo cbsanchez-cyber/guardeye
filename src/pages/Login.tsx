@@ -26,6 +26,11 @@ export const Login = () => {
         const { data: authData, error } = await supabase.auth.signUp({
           email: data.email,
           password: data.password,
+          options: {
+            data: {
+              full_name: data.full_name,
+            }
+          }
         });
         if (error) throw error;
         

@@ -26,9 +26,9 @@ export const Header = () => {
         
         <div className="flex items-center gap-5">
           <div className="flex items-center gap-2.5">
-            <span className="text-sm font-medium text-slate-800">{user?.name || 'Dr. Sarah Jenkins'}</span>
+            <span className="text-sm font-medium text-slate-800">{user?.name || user?.email || 'Dr. Sarah Jenkins'}</span>
             <div className="w-8 h-8 bg-slate-200 rounded-full flex items-center justify-center text-xs font-bold text-blue-600 uppercase">
-              {user?.name ? user.name.substring(0, 2) : 'SJ'}
+              {user?.name ? user.name.substring(0, 2) : (user?.email ? user.email.substring(0, 2) : 'SJ')}
             </div>
           </div>
           <button

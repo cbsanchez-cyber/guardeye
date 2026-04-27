@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Download, ChevronRight, FileSpreadsheet, CheckCircle2, Image as ImageIcon } from 'lucide-react';
-import api from '../api';
+import { Download, ChevronRight, FileSpreadsheet, CheckCircle2, Image as ImageIcon, Trash2 } from 'lucide-react';
+import { supabase } from '../supabaseClient';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { LoadingSpinner } from '../components/LoadingSpinner';
@@ -19,9 +19,20 @@ export const SessionRecords = () => {
 
   const fetchSessions = async () => {
     try {
-      const res = await api.get('/sessions');
-      setSessions(res.data.filter((s: any) => s.status === 'completed'));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      const { data, error } = await supabase
+        .from('sessions')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'completed')
+        .order('date', { ascending: false });
+        
+      if (error) throw error;
+      setSessions(data || []);
     } catch (error) {
+       console.error(error);
        toast.error('Failed to load past sessions');
     } finally {
        setLoading(false);
@@ -31,8 +42,31 @@ export const SessionRecords = () => {
   const handleDownloadCSV = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation(); // prevent row click
     try {
-      const res = await api.get(`/sessions/${sessionId}/report`);
-      const blob = new Blob([res.data], { type: 'text/csv' });
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('timestamp', { ascending: true });
+        
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        toast.info('No alerts recorded for this session');
+        return;
+      }
+
+      // Generate CSV manually
+      const headers = ['Timestamp', 'Student ID', 'Student Name', 'Behavior Type', 'Risk Score'];
+      const rows = data.map(alert => [
+        new Date(alert.timestamp).toISOString(),
+        alert.studentId || '',
+        alert.studentName || '',
+        alert.behaviorType || '',
+        alert.riskScore || ''
+      ]);
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      
+      const blob = new Blob([csvContent], { type: 'text/csv' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -43,21 +77,49 @@ export const SessionRecords = () => {
       document.body.removeChild(a);
       toast.success('Report downloaded successfully');
     } catch (error) {
+      console.error(error);
       toast.error('Failed to download report');
     }
   };
 
   const loadSessionAlerts = async (sessionId: string) => {
+      if (selectedSession === sessionId) {
+          setSelectedSession(null);
+          return;
+      }
       setSelectedSession(sessionId);
       setAlertsLoading(true);
       try {
-          const res = await api.get(`/sessions/${sessionId}/alerts`);
-          setSessionAlerts(res.data);
+          const { data, error } = await supabase
+            .from('alerts')
+            .select('*')
+            .eq('session_id', sessionId)
+            .order('timestamp', { ascending: false });
+            
+          if (error) throw error;
+          setSessionAlerts(data || []);
       } catch (error) {
+          console.error(error);
           toast.error("Failed to load session alerts");
       } finally {
           setAlertsLoading(false);
       }
+  };
+
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm('Are you sure you want to delete this session record?')) return;
+    try {
+      const { error } = await supabase.from('sessions').delete().eq('id', sessionId);
+      if (error) throw error;
+      
+      setSessions(sessions.filter(s => s.id !== sessionId));
+      if (selectedSession === sessionId) setSelectedSession(null);
+      toast.success('Session record deleted successfully');
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to delete session record');
+    }
   };
 
   const uniqueStudents = useMemo(() => {
@@ -112,6 +174,13 @@ export const SessionRecords = () => {
                         className="p-2 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
                      >
                          <FileSpreadsheet className="w-5 h-5" />
+                     </button>
+                     <button
+                        onClick={(e) => handleDeleteSession(session.id, e)}
+                        title="Delete Record"
+                        className="p-2 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                     >
+                         <Trash2 className="w-5 h-5" />
                      </button>
                      <ChevronRight className={`w-5 h-5 text-slate-400 transition-transform ${selectedSession === session.id ? 'rotate-90' : ''}`} />
                   </div>

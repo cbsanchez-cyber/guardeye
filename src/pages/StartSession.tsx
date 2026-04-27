@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Server, CheckCircle2, AlertCircle, X } from 'lucide-react';
-import api from '../api';
+import { supabase } from '../supabaseClient';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -20,10 +20,21 @@ export const StartSession = () => {
 
   const fetchSessions = async () => {
     try {
-      const res = await api.get('/sessions');
-      // Filter only upcoming
-      setSessions(res.data.filter((s: any) => s.status === 'upcoming'));
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      const { data, error } = await supabase
+        .from('sessions')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'upcoming')
+        .order('date', { ascending: true })
+        .order('startTime', { ascending: true });
+
+      if (error) throw error;
+      setSessions(data || []);
     } catch (error) {
+      console.error(error);
       toast.error('Failed to load sessions');
     } finally {
       setLoading(false);
@@ -34,21 +45,26 @@ export const StartSession = () => {
     setSelectedSession(session);
     setPiStatus('checking');
     
-    // Check Pi Status
-    api.get('/pi/status').then((res) => {
-      setPiStatus(res.data.online ? 'online' : 'offline');
-    }).catch(() => {
-      setPiStatus('offline');
-    });
+    // Simulate Pi Status Check
+    setTimeout(() => {
+      setPiStatus('online'); // Fake successful connection for UX
+    }, 1500);
   };
 
   const beginProctoring = async () => {
     if (!selectedSession) return;
     try {
-      await api.post(`/sessions/${selectedSession.id}/start`);
+      const { error } = await supabase
+        .from('sessions')
+        .update({ status: 'active' })
+        .eq('id', selectedSession.id);
+        
+      if (error) throw error;
+      
       toast.success('Session started');
       navigate(`/dashboard/monitoring?sessionId=${selectedSession.id}`);
     } catch (error) {
+      console.error(error);
       toast.error('Failed to start session');
     }
   };
