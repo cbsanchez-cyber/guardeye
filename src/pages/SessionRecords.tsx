@@ -123,12 +123,40 @@ export const SessionRecords = () => {
   };
 
   const uniqueStudents = useMemo(() => {
-    const students = Array.from(new Set(sessionAlerts.map(a => a.studentId)));
+    if (alertsLoading || !selectedSession) return [];
+
+    const studentMap = new Map();
+    sessionAlerts.forEach(alert => {
+      const id = alert.studentId || alert.studentName || 'Unknown';
+      if (!studentMap.has(id)) {
+        studentMap.set(id, {
+          id,
+          name: alert.studentName || id,
+          highestRisk: alert.riskScore || 0,
+          alertsCount: 1
+        });
+      } else {
+        const student = studentMap.get(id);
+        student.alertsCount += 1;
+        if ((alert.riskScore || 0) > student.highestRisk) {
+          student.highestRisk = alert.riskScore || 0;
+        }
+      }
+    });
+
+    let studentsData = Array.from(studentMap.values());
+
     // If no alerts, maybe mock some students:
-    if (students.length === 0 && !alertsLoading && selectedSession) {
-       return ['Student_1', 'Student_2', 'Student_3', 'Student_4', 'Student_5'];
+    if (studentsData.length === 0) {
+       studentsData = [
+         { id: 'Student_1', name: 'Student 1', highestRisk: 0, alertsCount: 0 },
+         { id: 'Student_2', name: 'Student 2', highestRisk: 0, alertsCount: 0 },
+         { id: 'Student_3', name: 'Student 3', highestRisk: 0, alertsCount: 0 },
+         { id: 'Student_4', name: 'Student 4', highestRisk: 0, alertsCount: 0 },
+         { id: 'Student_5', name: 'Student 5', highestRisk: 0, alertsCount: 0 }
+       ];
     }
-    return students;
+    return studentsData;
   }, [sessionAlerts, alertsLoading, selectedSession]);
 
   if (loading) return <div className="flex justify-center py-12"><LoadingSpinner className="w-8 h-8 text-blue-600" /></div>;
@@ -197,18 +225,23 @@ export const SessionRecords = () => {
                                <h4 className="text-sm font-semibold text-slate-800">Student Captures</h4>
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
-                               {uniqueStudents.map(studentId => (
-                                 <div key={studentId} className="flex flex-col items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
-                                   <div className="w-16 h-16 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
+                               {uniqueStudents.map(student => (
+                                 <div key={student.id} className="flex flex-col items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                                   <div className={`w-16 h-16 rounded-full overflow-hidden bg-slate-100 border-2 shrink-0 ${student.highestRisk >= 0.8 ? 'border-red-500' : student.highestRisk >= 0.5 ? 'border-amber-500' : 'border-slate-200'}`}>
                                       <img 
-                                        src={`https://i.pravatar.cc/150?u=${studentId}`} 
-                                        alt={studentId}
+                                        src={`https://i.pravatar.cc/150?u=${student.id}`} 
+                                        alt={student.name}
                                         className="w-full h-full object-cover"
                                       />
                                    </div>
-                                   <span className="text-xs font-medium text-slate-700 truncate w-full text-center">
-                                     {studentId}
-                                   </span>
+                                   <div className="flex flex-col items-center w-full">
+                                     <span className="text-xs font-medium text-slate-700 truncate w-full text-center">
+                                       {student.name}
+                                     </span>
+                                     <span className={`text-[10px] uppercase font-bold mt-1 ${student.alertsCount > 0 ? 'text-red-500' : 'text-emerald-500'}`}>
+                                       {student.alertsCount > 0 ? 'Flagged' : 'Normal'}
+                                     </span>
+                                   </div>
                                  </div>
                                ))}
                             </div>
