@@ -12,11 +12,15 @@ export const StartSession = () => {
   const [selectedSession, setSelectedSession] = useState<any | null>(null);
   
   const [piStatus, setPiStatus] = useState<'idle' | 'checking' | 'online' | 'offline'>('idle');
+  const [deviceChannel, setDeviceChannel] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     fetchSessions();
-  }, []);
+    return () => {
+      if (deviceChannel) supabase.removeChannel(deviceChannel);
+    };
+  }, [deviceChannel]);
 
   const fetchSessions = async () => {
     try {
@@ -43,12 +47,43 @@ export const StartSession = () => {
 
   const handleStartClick = (session: any) => {
     setSelectedSession(session);
+    setPiStatus('idle');
+  };
+
+  const pingDevice = (deviceId: string) => {
+    if (!selectedSession) return;
     setPiStatus('checking');
     
-    // Simulate Pi Status Check
+    // Connect to Supabase channel specifically for this device
+    const channel = supabase.channel(`device_cmd_${deviceId}`);
+    setDeviceChannel(channel);
+
+    channel
+      .on('broadcast', { event: 'device-ack' }, () => {
+        setPiStatus('online');
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          // Send a command to the device to join this session
+          channel.send({
+            type: 'broadcast',
+            event: 'assign-session',
+            payload: { sessionId: selectedSession.id },
+          });
+        }
+      });
+
+    // Timeout if device doesn't respond in 15 seconds
     setTimeout(() => {
-      setPiStatus('online'); // Fake successful connection for UX
-    }, 1500);
+      setPiStatus((prev) => (prev === 'checking' ? 'offline' : prev));
+    }, 15000);
+  };
+
+  const handleCloseModal = () => {
+    setSelectedSession(null);
+    setPiStatus('idle');
+    if (deviceChannel) supabase.removeChannel(deviceChannel);
+    setDeviceChannel(null);
   };
 
   const beginProctoring = async () => {
@@ -140,31 +175,60 @@ export const StartSession = () => {
           <div className="relative w-full max-w-sm transform overflow-hidden rounded-[24px] bg-white p-6 text-left shadow-2xl transition-all flex flex-col gap-6">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold leading-6 text-slate-800 tracking-tight">Hardware Connection</h3>
-              <button onClick={() => setSelectedSession(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
+              <button onClick={handleCloseModal} className="text-slate-400 hover:text-slate-600 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
             
-            <div className="bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col items-center justify-center py-10 px-4 text-center">
+            <div className="bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col items-center py-6 px-4 text-center">
+              {piStatus === 'idle' && (
+                <div className="w-full">
+                  <p className="text-sm text-slate-600 mb-4 text-left">Enter the Device ID of your powered-on Edge Device to connect it to this session.</p>
+                  <input
+                    type="text"
+                    id="deviceIdInput"
+                    placeholder="e.g. pi-edge-001"
+                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                  />
+                  <button
+                    onClick={() => {
+                      const input = document.getElementById('deviceIdInput') as HTMLInputElement;
+                      if (input && input.value) {
+                         pingDevice(input.value);
+                      }
+                    }}
+                    className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors"
+                  >
+                    Connect Device
+                  </button>
+                </div>
+              )}
+              
               {piStatus === 'checking' && (
                 <>
-                  <LoadingSpinner className="w-12 h-12 text-blue-600 mb-4" />
-                  <p className="text-sm font-medium text-slate-800">Pinging Raspberry Pi...</p>
-                  <p className="text-sm text-slate-500 mt-1">Establishing secure connection to camera array.</p>
+                  <LoadingSpinner className="w-12 h-12 text-blue-600 mb-4 mt-2" />
+                  <p className="text-sm font-medium text-slate-800">Searching for Edge Device...</p>
+                  <p className="text-xs text-slate-500 mt-1 px-2">Sending wake signal to the device.</p>
                 </>
               )}
               {piStatus === 'online' && (
                 <>
-                  <CheckCircle2 className="w-12 h-12 text-emerald-500 mb-4" />
-                  <p className="text-sm font-medium text-slate-800">Pi connected. Ready to start.</p>
-                  <p className="text-sm text-slate-500 mt-1">Camera and ML models are initialized.</p>
+                  <CheckCircle2 className="w-12 h-12 text-emerald-500 mb-4 mt-2" />
+                  <p className="text-sm font-medium text-slate-800">Device connected and assigned!</p>
+                  <p className="text-xs text-slate-500 mt-1">Camera and ML models are initializing for this session.</p>
                 </>
               )}
                {piStatus === 'offline' && (
                 <>
-                  <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-                  <p className="text-sm font-medium text-slate-800">Pi not detected.</p>
-                  <p className="text-sm text-slate-500 mt-1">Check network and power on the hardware.</p>
+                  <AlertCircle className="w-12 h-12 text-red-500 mb-4 mt-2" />
+                  <p className="text-sm font-medium text-slate-800">Device offline or not found.</p>
+                  <p className="text-xs text-slate-500 mt-1 px-2">Ensure the Pi is powered on and connected to the internet.</p>
+                  <button
+                    onClick={() => setPiStatus('idle')}
+                    className="mt-4 px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  >
+                    Try Again
+                  </button>
                 </>
               )}
             </div>
@@ -173,7 +237,7 @@ export const StartSession = () => {
                <button
                   type="button"
                   className="rounded-xl bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-sm border border-slate-200 hover:bg-slate-50 transition-colors"
-                  onClick={() => setSelectedSession(null)}
+                  onClick={handleCloseModal}
                 >
                   Cancel
                 </button>

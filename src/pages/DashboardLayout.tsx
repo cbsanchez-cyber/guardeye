@@ -63,18 +63,24 @@ export const DashboardLayout = () => {
             // Generate a random alert 40% of the time
             if (Math.random() > 0.6) {
               const students = ['Student_1', 'Student_2', 'Student_3', 'Student_4', 'Student_5'];
-              const behaviors = ['Looking Away', 'Phone Detected', 'Multiple Persons', 'Absent'];
+              const behaviors = ['head_pose_warning', 'phone_detected', 'multiple_persons', 'absent'];
+              const headStatuses = ['Looking Down!', 'Looking Left!', 'Looking Right!', 'Looking Up!'];
               const studentId = students[Math.floor(Math.random() * students.length)];
               const behaviorType = behaviors[Math.floor(Math.random() * behaviors.length)];
+              const headStatus = behaviorType === 'head_pose_warning' ? headStatuses[Math.floor(Math.random() * headStatuses.length)] : null;
               const riskScore = Math.random() * 0.5 + 0.5;
 
               await supabase.from('alerts').insert([{
                 user_id: user.id,
                 session_id: session.id,
-                studentId: studentId,
+                studentId: studentId.replace('Student_', ''), // to match format '1' instead of 'Student_1'
                 studentName: studentId.replace('_', ' '),
                 behaviorType: behaviorType,
                 riskScore: riskScore,
+                headStatus: headStatus,
+                alertThreshold: 0.75,
+                frameIndex: Math.floor(Math.random() * 100),
+                details: headStatus || behaviorType,
                 frameUrl: 'https://cdn.coverr.co/videos/coverr-students-listening-in-a-university-lecture-3059/1080p.mp4'
               }]);
             }

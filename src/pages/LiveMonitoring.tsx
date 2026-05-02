@@ -18,6 +18,10 @@ export const LiveMonitoring = () => {
   const [ending, setEnding] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
+  // WebRTC references
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+
   // Use refs to hold state inside interval without complex dependencies
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
@@ -63,7 +67,6 @@ export const LiveMonitoring = () => {
           // Auto-end session if time limit reached
           const currentSession = sessionRef.current;
           if (currentSession && currentSession.timeLimit && currentSession.timeLimit > 0 && next >= currentSession.timeLimit * 60) {
-             // Let the effect clean up on the next render, but trigger the end right now
              supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId).then(() => {
                  localStorage.removeItem(`session_${sessionId}_elapsed`);
                  localStorage.removeItem(`session_${sessionId}_paused`);
@@ -78,7 +81,6 @@ export const LiveMonitoring = () => {
       }
     }, 1000);
 
-    // Fetch session details
     const fetchSession = async () => {
       try {
         const { data } = await supabase.from('sessions').select('*').eq('id', sessionId).single();
@@ -92,7 +94,6 @@ export const LiveMonitoring = () => {
     };
     fetchSession();
 
-    // Polling logic
     const fetchAlerts = async () => {
       if (isPausedRef.current) return;
       try {
@@ -103,14 +104,93 @@ export const LiveMonitoring = () => {
       }
     };
 
-    // Initial fetch
     fetchAlerts().then(() => setLoading(false));
 
     const interval = setInterval(fetchAlerts, 5000);
 
+    // WebRTC Setup using Supabase Realtime for Signaling
+    const webrtcChannel = supabase.channel(`webrtc_${sessionId}`);
+    
+    const initWebRTC = async () => {
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+      peerConnectionRef.current = pc;
+
+      // Add a transciever to specify we want to receive video
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      pc.ontrack = (event) => {
+        if (videoRef.current && event.streams[0]) {
+          videoRef.current.srcObject = event.streams[0];
+        }
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          webrtcChannel.send({
+            type: 'broadcast',
+            event: 'candidate',
+            payload: { candidate: event.candidate },
+          });
+        }
+      };
+
+      // Create offer since the web app is initiating the connection to the waiting edge device
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        webrtcChannel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: { offer },
+        });
+      } catch (err) {
+        console.error('Error creating offer:', err);
+      }
+
+      return pc;
+    };
+
+    webrtcChannel
+      .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+        try {
+          const pc = peerConnectionRef.current;
+          if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+          }
+        } catch (error) {
+          console.error('Error handling answer:', error);
+        }
+      })
+      .on('broadcast', { event: 'candidate' }, async ({ payload }) => {
+        try {
+          if (peerConnectionRef.current && payload.candidate) {
+            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
+          }
+        } catch (error) {
+          console.error('Error handling ICE candidate:', error);
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          // Tell the edge device we are ready and initiate the connection
+          webrtcChannel.send({
+            type: 'broadcast',
+            event: 'viewer-ready',
+            payload: {},
+          });
+          await initWebRTC();
+        }
+      });
+
     return () => {
       clearInterval(interval);
       clearInterval(timerInterval);
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close();
+      }
+      supabase.removeChannel(webrtcChannel);
     };
   }, [sessionId, navigate]);
 
@@ -143,13 +223,18 @@ export const LiveMonitoring = () => {
     return acc;
   }, {} as Record<string, any>);
 
-  const students = Array.from({length: 5}, (_, i) => `Student_${i + 1}`).map(studentId => {
+  let uniqueStudentIds = Array.from(new Set(alerts.map(a => a.studentId)));
+  if (uniqueStudentIds.length === 0) {
+      uniqueStudentIds = Array.from({length: 5}, (_, i) => `${i + 1}`);
+  }
+
+  const students = uniqueStudentIds.map(studentId => {
     const latestAlert = latestAlertsByStudent[studentId];
     const isRecent = latestAlert && (new Date().getTime() - new Date(latestAlert.timestamp).getTime() < 15000); // Consider normal if older than 15s
     
     return {
       studentId,
-      status: isRecent ? latestAlert.behaviorType : 'Normal',
+      status: isRecent ? (latestAlert.headStatus || latestAlert.details || latestAlert.behaviorType) : 'Normal',
       riskScore: isRecent ? latestAlert.riskScore : 0,
       timestamp: isRecent ? latestAlert.timestamp : null,
     };
@@ -233,12 +318,10 @@ export const LiveMonitoring = () => {
            ) : (
               <div className="w-full h-full relative select-none bg-slate-800 overflow-hidden flex items-center justify-center group">
                  <video 
+                    ref={videoRef}
                     autoPlay 
-                    loop 
-                    muted 
                     playsInline 
-                    src="https://cdn.coverr.co/videos/coverr-students-listening-in-a-university-lecture-3059/1080p.mp4"
-                    className="w-full h-full object-cover opacity-[0.85] mix-blend-luminosity "
+                    className="w-full h-full object-cover"
                  />
                  {/* Simulated AI Overlays */}
                  <div className="absolute inset-0 pointer-events-none">

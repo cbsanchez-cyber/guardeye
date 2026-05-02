@@ -29,8 +29,12 @@ CREATE TABLE alerts (
   session_id uuid REFERENCES sessions ON DELETE CASCADE NOT NULL,
   "studentId" text NOT NULL,
   "studentName" text NOT NULL,
-  "behaviorType" text NOT NULL,
-  "riskScore" numeric NOT NULL,
+  "behaviorType" text NOT NULL, -- maps to event_type
+  "riskScore" numeric NOT NULL, -- maps to risk_score
+  "headStatus" text,            -- new: from head_status
+  "alertThreshold" numeric,     -- new: from alert_threshold
+  "frameIndex" integer,         -- new: from frame_index
+  "details" text,               -- new: from details
   timestamp timestamptz DEFAULT now(),
   "frameUrl" text
 );

@@ -56,13 +56,16 @@ export const SessionRecords = () => {
       }
 
       // Generate CSV manually
-      const headers = ['Timestamp', 'Student ID', 'Student Name', 'Behavior Type', 'Risk Score'];
+      const headers = ['Timestamp', 'Frame Index', 'Student ID', 'Event Type', 'Head Status', 'Risk Score', 'Alert Threshold', 'Details'];
       const rows = data.map(alert => [
         new Date(alert.timestamp).toISOString(),
+        alert.frameIndex !== null ? alert.frameIndex : '',
         alert.studentId || '',
-        alert.studentName || '',
         alert.behaviorType || '',
-        alert.riskScore || ''
+        alert.headStatus || '',
+        alert.riskScore !== null ? alert.riskScore : '',
+        alert.alertThreshold !== null ? alert.alertThreshold : '',
+        alert.details || ''
       ]);
       const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
       
@@ -227,12 +230,8 @@ export const SessionRecords = () => {
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4">
                                {uniqueStudents.map(student => (
                                  <div key={student.id} className="flex flex-col items-center gap-2 bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
-                                   <div className={`w-16 h-16 rounded-full overflow-hidden bg-slate-100 border-2 shrink-0 ${student.highestRisk >= 0.8 ? 'border-red-500' : student.highestRisk >= 0.5 ? 'border-amber-500' : 'border-slate-200'}`}>
-                                      <img 
-                                        src={`https://i.pravatar.cc/150?u=${student.id}`} 
-                                        alt={student.name}
-                                        className="w-full h-full object-cover"
-                                      />
+                                   <div className={`w-16 h-16 rounded-full bg-slate-50 border-2 shrink-0 flex items-center justify-center font-bold text-slate-600 text-xl ${student.highestRisk >= 0.8 ? 'border-red-500 text-red-600 bg-red-50' : student.highestRisk >= 0.5 ? 'border-amber-500 text-amber-600 bg-amber-50' : 'border-slate-200'}`}>
+                                      {student.id.replace('Student_', 'S')}
                                    </div>
                                    <div className="flex flex-col items-center w-full">
                                      <span className="text-xs font-medium text-slate-700 truncate w-full text-center">
