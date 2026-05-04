@@ -164,7 +164,10 @@ export const LiveMonitoring = () => {
       .on('broadcast', { event: 'pi-ready' }, async () => {
         console.log('WebRTC: Received pi-ready');
         try {
-          const pc = peerConnectionRef.current || await initWebRTC();
+          if (peerConnectionRef.current) {
+            peerConnectionRef.current.close();
+          }
+          const pc = await initWebRTC();
           // Create offer since the web app is initiating the connection
           console.log('WebRTC: Creating offer');
           const offer = await pc.createOffer();
