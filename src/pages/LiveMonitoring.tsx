@@ -22,6 +22,8 @@ export const LiveMonitoring = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
 
+  const [webrtcStatus, setWebrtcStatus] = useState<string>('Connecting...');
+
   // Use refs to hold state inside interval without complex dependencies
   const isPausedRef = useRef(isPaused);
   isPausedRef.current = isPaused;
@@ -112,6 +114,7 @@ export const LiveMonitoring = () => {
     const webrtcChannel = supabase.channel(`webrtc_${sessionId}`);
     
     const initWebRTC = async () => {
+      console.log('WebRTC: initWebRTC called');
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
       });
@@ -121,13 +124,21 @@ export const LiveMonitoring = () => {
       pc.addTransceiver('video', { direction: 'recvonly' });
 
       pc.ontrack = (event) => {
-        if (videoRef.current && event.streams[0]) {
-          videoRef.current.srcObject = event.streams[0];
+        console.log('WebRTC: Received track', event.track.kind);
+        if (videoRef.current) {
+          if (event.streams && event.streams[0]) {
+            console.log('WebRTC: Setting srcObject to event.streams[0]');
+            videoRef.current.srcObject = event.streams[0];
+          } else {
+            console.log('WebRTC: Setting srcObject to new MediaStream');
+            videoRef.current.srcObject = new MediaStream([event.track]);
+          }
         }
       };
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
+          console.log('WebRTC: Sending ICE candidate');
           webrtcChannel.send({
             type: 'broadcast',
             event: 'candidate',
@@ -136,45 +147,65 @@ export const LiveMonitoring = () => {
         }
       };
 
-      // Create offer since the web app is initiating the connection to the waiting edge device
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        webrtcChannel.send({
-          type: 'broadcast',
-          event: 'offer',
-          payload: { offer },
-        });
-      } catch (err) {
-        console.error('Error creating offer:', err);
-      }
+      pc.oniceconnectionstatechange = () => {
+        console.log('WebRTC: ICE Connection State:', pc.iceConnectionState);
+        setWebrtcStatus('ICE: ' + pc.iceConnectionState);
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log('WebRTC: Connection State:', pc.connectionState);
+        setWebrtcStatus('Connection: ' + pc.connectionState);
+      };
 
       return pc;
     };
 
     webrtcChannel
+      .on('broadcast', { event: 'pi-ready' }, async () => {
+        console.log('WebRTC: Received pi-ready');
+        try {
+          const pc = peerConnectionRef.current || await initWebRTC();
+          // Create offer since the web app is initiating the connection
+          console.log('WebRTC: Creating offer');
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          console.log('WebRTC: Sending offer');
+          webrtcChannel.send({
+            type: 'broadcast',
+            event: 'offer',
+            payload: { offer },
+          });
+        } catch (err) {
+          console.error('WebRTC: Error creating offer on pi-ready:', err);
+        }
+      })
       .on('broadcast', { event: 'answer' }, async ({ payload }) => {
+        console.log('WebRTC: Received answer');
         try {
           const pc = peerConnectionRef.current;
           if (pc) {
             await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
+            console.log('WebRTC: Remote description set from answer');
           }
         } catch (error) {
-          console.error('Error handling answer:', error);
+          console.error('WebRTC: Error handling answer:', error);
         }
       })
       .on('broadcast', { event: 'candidate' }, async ({ payload }) => {
+        console.log('WebRTC: Received ICE candidate');
         try {
           if (peerConnectionRef.current && payload.candidate) {
             await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
           }
         } catch (error) {
-          console.error('Error handling ICE candidate:', error);
+          console.error('WebRTC: Error handling ICE candidate:', error);
         }
       })
       .subscribe(async (status) => {
+        console.log('WebRTC: Channel status:', status);
         if (status === 'SUBSCRIBED') {
           // Tell the edge device we are ready and initiate the connection
+          console.log('WebRTC: Sending viewer-ready');
           webrtcChannel.send({
             type: 'broadcast',
             event: 'viewer-ready',
@@ -321,22 +352,11 @@ export const LiveMonitoring = () => {
                     ref={videoRef}
                     autoPlay 
                     playsInline 
+                    muted
                     className="w-full h-full object-cover"
                  />
-                 {/* Simulated AI Overlays */}
-                 <div className="absolute inset-0 pointer-events-none">
-                    <div className="absolute top-[30%] left-[40%] w-[12%] h-[20%] border-[1.5px] border-emerald-400/80 rounded bg-emerald-400/10 transition-all duration-1000 ease-in-out hidden sm:block">
-                        <span className="absolute -top-5 left-0 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">ID: 42 (Student)</span>
-                    </div>
-                    <div className="absolute top-[25%] left-[65%] w-[10%] h-[18%] border-[1.5px] border-emerald-400/80 rounded bg-emerald-400/10 transition-all duration-1000 ease-in-out hidden sm:block">
-                        <span className="absolute -top-5 left-0 bg-emerald-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">ID: 87 (Student)</span>
-                    </div>
-                    {/* Active Alert Overlay */}
-                    {students.some(s => s.status !== 'Normal') && (
-                        <div className="absolute top-[45%] left-[25%] w-[14%] h-[19%] border-[1.5px] border-red-500/90 rounded bg-red-500/20 animate-pulse hidden sm:block shadow-[0_0_15px_rgba(239,68,68,0.3)]">
-                            <span className="absolute -top-5 left-0 bg-red-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-sm whitespace-nowrap shadow-sm">Suspicious Activity Detected</span>
-                        </div>
-                    )}
+                 <div className="absolute top-4 right-4 z-10 bg-black/60 text-white text-xs px-2 py-1.5 rounded border border-white/10 font-mono">
+                    {webrtcStatus}
                  </div>
                  {/* Scanning line animation */}
                  <div className="absolute left-0 right-0 h-1.5 bg-gradient-to-b from-transparent to-emerald-500/40 blur-[1px] animate-scan" style={{ top: 0 }} />
@@ -357,7 +377,7 @@ export const LiveMonitoring = () => {
                  <div key={student.studentId} className="p-3 border border-slate-100 rounded-[12px] bg-white shadow-sm flex items-center justify-between transition-colors">
                    <div className="flex items-center gap-3">
                      <div className="w-10 h-10 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center font-semibold text-slate-600 shrink-0">
-                        {student.studentId.replace('Student_', 'S')}
+                        {student.studentId && typeof student.studentId === 'string' ? student.studentId.replace('Student_', 'S') : student.studentId}
                      </div>
                      <div className="min-w-0 pr-2">
                         <p className="text-sm font-semibold text-slate-800 truncate">{student.studentId}</p>
