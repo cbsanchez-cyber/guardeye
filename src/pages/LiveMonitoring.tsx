@@ -207,14 +207,28 @@ export const LiveMonitoring = () => {
       .subscribe(async (status) => {
         console.log('WebRTC: Channel status:', status);
         if (status === 'SUBSCRIBED') {
-          // Tell the edge device we are ready and initiate the connection
+          // Tell the Pi we are on the page
           console.log('WebRTC: Sending viewer-ready');
           webrtcChannel.send({
             type: 'broadcast',
             event: 'viewer-ready',
             payload: {},
           });
-          await initWebRTC();
+          // Also create and send offer immediately in case Pi is already waiting
+          try {
+            const pc = await initWebRTC();
+            console.log('WebRTC: Creating initial offer');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            console.log('WebRTC: Sending initial offer');
+            webrtcChannel.send({
+              type: 'broadcast',
+              event: 'offer',
+              payload: { offer },
+            });
+          } catch (err) {
+            console.error('WebRTC: Error creating initial offer:', err);
+          }
         }
       });
 
