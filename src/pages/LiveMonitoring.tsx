@@ -21,6 +21,7 @@ export const LiveMonitoring = () => {
   // WebRTC references
   const videoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const webrtcChannelRef = useRef<any>(null);
 
   const [webrtcStatus, setWebrtcStatus] = useState<string>('Connecting...');
 
@@ -112,6 +113,7 @@ export const LiveMonitoring = () => {
 
     // WebRTC Setup using Supabase Realtime for Signaling
     const webrtcChannel = supabase.channel(`webrtc_${sessionId}`);
+    webrtcChannelRef.current = webrtcChannel;
     
     const initWebRTC = async () => {
       console.log('WebRTC: initWebRTC called');
@@ -204,31 +206,17 @@ export const LiveMonitoring = () => {
           console.error('WebRTC: Error handling ICE candidate:', error);
         }
       })
-      .subscribe(async (status) => {
+      .subscribe((status) => {
         console.log('WebRTC: Channel status:', status);
         if (status === 'SUBSCRIBED') {
-          // Tell the Pi we are on the page
+          // Tell the Pi the viewer is ready — the Pi responds with pi-ready,
+          // which triggers the single code path that creates the peer connection.
           console.log('WebRTC: Sending viewer-ready');
           webrtcChannel.send({
             type: 'broadcast',
             event: 'viewer-ready',
             payload: {},
           });
-          // Also create and send offer immediately in case Pi is already waiting
-          try {
-            const pc = await initWebRTC();
-            console.log('WebRTC: Creating initial offer');
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            console.log('WebRTC: Sending initial offer');
-            webrtcChannel.send({
-              type: 'broadcast',
-              event: 'offer',
-              payload: { offer },
-            });
-          } catch (err) {
-            console.error('WebRTC: Error creating initial offer:', err);
-          }
         }
       });
 
@@ -246,13 +234,22 @@ export const LiveMonitoring = () => {
      if (!window.confirm("Are you sure you want to end this monitoring session?")) return;
      setEnding(true);
      try {
+         // Signal the Pi to stop so it resets and can accept a new session
+         if (webrtcChannelRef.current) {
+           webrtcChannelRef.current.send({
+             type: 'broadcast',
+             event: 'session-ended',
+             payload: {},
+           });
+         }
+
          const { error } = await supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId);
          if (error) throw error;
-         
+
          localStorage.removeItem(`session_${sessionId}_elapsed`);
          localStorage.removeItem(`session_${sessionId}_paused`);
          localStorage.removeItem(`session_${sessionId}_lastUpdate`);
-         
+
          toast.success("Session completed");
          navigate('/dashboard/records');
      } catch (error) {
