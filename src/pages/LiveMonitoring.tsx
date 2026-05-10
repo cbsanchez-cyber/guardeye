@@ -22,8 +22,9 @@ export const LiveMonitoring = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const webrtcChannelRef = useRef<any>(null);
+  const viewerReadyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [webrtcStatus, setWebrtcStatus] = useState<string>('Connecting...');
+  const [webrtcStatus, setWebrtcStatus] = useState<string>('Waiting for Pi...');
 
   // Use refs to hold state inside interval without complex dependencies
   const isPausedRef = useRef(isPaused);
@@ -165,12 +166,16 @@ export const LiveMonitoring = () => {
     webrtcChannel
       .on('broadcast', { event: 'pi-ready' }, async () => {
         console.log('WebRTC: Received pi-ready');
+        // Pi responded — stop retrying viewer-ready
+        if (viewerReadyIntervalRef.current) {
+          clearInterval(viewerReadyIntervalRef.current);
+          viewerReadyIntervalRef.current = null;
+        }
         try {
           if (peerConnectionRef.current) {
             peerConnectionRef.current.close();
           }
           const pc = await initWebRTC();
-          // Create offer since the web app is initiating the connection
           console.log('WebRTC: Creating offer');
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -209,20 +214,27 @@ export const LiveMonitoring = () => {
       .subscribe((status) => {
         console.log('WebRTC: Channel status:', status);
         if (status === 'SUBSCRIBED') {
-          // Tell the Pi the viewer is ready — the Pi responds with pi-ready,
-          // which triggers the single code path that creates the peer connection.
-          console.log('WebRTC: Sending viewer-ready');
-          webrtcChannel.send({
-            type: 'broadcast',
-            event: 'viewer-ready',
-            payload: {},
-          });
+          const sendViewerReady = () => {
+            console.log('WebRTC: Sending viewer-ready');
+            webrtcChannel.send({
+              type: 'broadcast',
+              event: 'viewer-ready',
+              payload: {},
+            });
+          };
+
+          // Send immediately, then retry every 5s until pi-ready is received
+          sendViewerReady();
+          viewerReadyIntervalRef.current = setInterval(sendViewerReady, 5000);
         }
       });
 
     return () => {
       clearInterval(interval);
       clearInterval(timerInterval);
+      if (viewerReadyIntervalRef.current) {
+        clearInterval(viewerReadyIntervalRef.current);
+      }
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
       }
