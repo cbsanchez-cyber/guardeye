@@ -11,8 +11,6 @@ export const LiveMonitoring = () => {
   const navigate = useNavigate();
 
   const [alerts, setAlerts] = useState<any[]>([]);
-  const [detections, setDetections] = useState<any[]>([]);
-  const [lastDetectionTime, setLastDetectionTime] = useState<Date | null>(null);
   const [session, setSession] = useState<any>(null);
   const sessionRef = useRef<any>(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -23,10 +21,8 @@ export const LiveMonitoring = () => {
   // WebRTC references
   const videoRef = useRef<HTMLVideoElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const webrtcChannelRef = useRef<any>(null);
-  const viewerReadyIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const [webrtcStatus, setWebrtcStatus] = useState<string>('Waiting for Pi...');
+  const [webrtcStatus, setWebrtcStatus] = useState<string>('Connecting...');
 
   // Use refs to hold state inside interval without complex dependencies
   const isPausedRef = useRef(isPaused);
@@ -114,21 +110,8 @@ export const LiveMonitoring = () => {
 
     const interval = setInterval(fetchAlerts, 5000);
 
-    // Real-time student detections via Supabase broadcast
-    // Pi publishes current detections every ~1s on this channel
-    const detectionsChannel = supabase.channel(`detections_${sessionId}`);
-    detectionsChannel
-      .on('broadcast', { event: 'student-update' }, ({ payload }) => {
-        if (!isPausedRef.current) {
-          setDetections(payload.students || []);
-          setLastDetectionTime(new Date());
-        }
-      })
-      .subscribe();
-
     // WebRTC Setup using Supabase Realtime for Signaling
     const webrtcChannel = supabase.channel(`webrtc_${sessionId}`);
-    webrtcChannelRef.current = webrtcChannel;
     
     const initWebRTC = async () => {
       console.log('WebRTC: initWebRTC called');
@@ -180,16 +163,12 @@ export const LiveMonitoring = () => {
     webrtcChannel
       .on('broadcast', { event: 'pi-ready' }, async () => {
         console.log('WebRTC: Received pi-ready');
-        // Pi responded — stop retrying viewer-ready
-        if (viewerReadyIntervalRef.current) {
-          clearInterval(viewerReadyIntervalRef.current);
-          viewerReadyIntervalRef.current = null;
-        }
         try {
           if (peerConnectionRef.current) {
             peerConnectionRef.current.close();
           }
           const pc = await initWebRTC();
+          // Create offer since the web app is initiating the connection
           console.log('WebRTC: Creating offer');
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -225,35 +204,41 @@ export const LiveMonitoring = () => {
           console.error('WebRTC: Error handling ICE candidate:', error);
         }
       })
-      .subscribe((status) => {
+      .subscribe(async (status) => {
         console.log('WebRTC: Channel status:', status);
         if (status === 'SUBSCRIBED') {
-          const sendViewerReady = () => {
-            console.log('WebRTC: Sending viewer-ready');
+          // Tell the Pi we are on the page
+          console.log('WebRTC: Sending viewer-ready');
+          webrtcChannel.send({
+            type: 'broadcast',
+            event: 'viewer-ready',
+            payload: {},
+          });
+          // Also create and send offer immediately in case Pi is already waiting
+          try {
+            const pc = await initWebRTC();
+            console.log('WebRTC: Creating initial offer');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            console.log('WebRTC: Sending initial offer');
             webrtcChannel.send({
               type: 'broadcast',
-              event: 'viewer-ready',
-              payload: {},
+              event: 'offer',
+              payload: { offer },
             });
-          };
-
-          // Send immediately, then retry every 5s until pi-ready is received
-          sendViewerReady();
-          viewerReadyIntervalRef.current = setInterval(sendViewerReady, 5000);
+          } catch (err) {
+            console.error('WebRTC: Error creating initial offer:', err);
+          }
         }
       });
 
     return () => {
       clearInterval(interval);
       clearInterval(timerInterval);
-      if (viewerReadyIntervalRef.current) {
-        clearInterval(viewerReadyIntervalRef.current);
-      }
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
       }
       supabase.removeChannel(webrtcChannel);
-      supabase.removeChannel(detectionsChannel);
     };
   }, [sessionId, navigate]);
 
@@ -261,22 +246,13 @@ export const LiveMonitoring = () => {
      if (!window.confirm("Are you sure you want to end this monitoring session?")) return;
      setEnding(true);
      try {
-         // Signal the Pi to stop so it resets and can accept a new session
-         if (webrtcChannelRef.current) {
-           webrtcChannelRef.current.send({
-             type: 'broadcast',
-             event: 'session-ended',
-             payload: {},
-           });
-         }
-
          const { error } = await supabase.from('sessions').update({ status: 'completed' }).eq('id', sessionId);
          if (error) throw error;
-
+         
          localStorage.removeItem(`session_${sessionId}_elapsed`);
          localStorage.removeItem(`session_${sessionId}_paused`);
          localStorage.removeItem(`session_${sessionId}_lastUpdate`);
-
+         
          toast.success("Session completed");
          navigate('/dashboard/records');
      } catch (error) {
@@ -288,43 +264,29 @@ export const LiveMonitoring = () => {
 
   if (loading) return <div className="flex justify-center py-12"><LoadingSpinner className="w-8 h-8 text-blue-600" /></div>;
 
-  // Primary: use real-time broadcast detections from the Pi
-  // Fallback: derive from the alerts table (fixes snake_case field names from Pi)
-  let students: { studentId: string; status: string; riskScore: number; behavior?: string }[];
-
-  if (detections.length > 0) {
-    students = detections.map((d: any) => ({
-      studentId: String(d.id ?? d.student_id ?? 'Unknown'),
-      status: d.status ?? 'Normal',
-      riskScore: d.risk_score ?? 0,
-      behavior: d.behavior,
-    }));
-  } else {
-    // Fallback: build from alert history — supports both camelCase and snake_case field names
-    const normalize = (a: any) => ({
-      studentId: String(a.student_id ?? a.studentId ?? 'Unknown'),
-      riskScore: a.risk_score ?? a.riskScore ?? 0,
-      status: a.head_status ?? a.headStatus ?? a.behavior_type ?? a.behaviorType ?? a.details ?? 'Alert',
-      timestamp: a.timestamp_iso ?? a.timestamp ?? a.created_at,
-    });
-
-    const latestByStudent: Record<string, any> = {};
-    for (const raw of alerts) {
-      const a = normalize(raw);
-      if (!latestByStudent[a.studentId] || new Date(a.timestamp).getTime() > new Date(latestByStudent[a.studentId].timestamp).getTime()) {
-        latestByStudent[a.studentId] = a;
-      }
+  const latestAlertsByStudent = alerts.reduce((acc, alert) => {
+    if (!acc[alert.studentId] || new Date(alert.timestamp).getTime() > new Date(acc[alert.studentId].timestamp).getTime()) {
+      acc[alert.studentId] = alert;
     }
+    return acc;
+  }, {} as Record<string, any>);
 
-    students = Object.values(latestByStudent).map((a: any) => {
-      const isRecent = new Date().getTime() - new Date(a.timestamp).getTime() < 15000;
-      return {
-        studentId: a.studentId,
-        status: isRecent ? a.status : 'Normal',
-        riskScore: isRecent ? a.riskScore : 0,
-      };
-    });
+  let uniqueStudentIds = Array.from(new Set(alerts.map(a => a.studentId)));
+  if (uniqueStudentIds.length === 0) {
+      uniqueStudentIds = Array.from({length: 5}, (_, i) => `${i + 1}`);
   }
+
+  const students = uniqueStudentIds.map(studentId => {
+    const latestAlert = latestAlertsByStudent[studentId];
+    const isRecent = latestAlert && (new Date().getTime() - new Date(latestAlert.timestamp).getTime() < 15000); // Consider normal if older than 15s
+    
+    return {
+      studentId,
+      status: isRecent ? (latestAlert.headStatus || latestAlert.details || latestAlert.behaviorType) : 'Normal',
+      riskScore: isRecent ? latestAlert.riskScore : 0,
+      timestamp: isRecent ? latestAlert.timestamp : null,
+    };
+  });
 
   const formatTime = (totalSeconds: number) => {
     const hours = Math.floor(totalSeconds / 3600);
@@ -422,20 +384,8 @@ export const LiveMonitoring = () => {
         {/* Right: Detected Students */}
         <div className="col-span-1 lg:col-span-1 flex flex-col bg-white rounded-[16px] border border-slate-200 shadow-[0_1px_3px_rgba(0,0,0,0.05)] overflow-hidden lg:h-[calc(100vh-14rem)] min-h-[400px]">
            <div className="p-4 px-5 border-b border-slate-100 flex justify-between items-center bg-white shrink-0">
-              <div>
-                <h2 className="text-base font-semibold text-slate-800">Detected Students</h2>
-                {lastDetectionTime && (
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Updated {Math.round((Date.now() - lastDetectionTime.getTime()) / 1000)}s ago
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {detections.length > 0 && (
-                  <span className="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-medium border border-emerald-100">Live</span>
-                )}
-                <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded-md font-medium border border-slate-100">{students.length} Active</span>
-              </div>
+              <h2 className="text-base font-semibold text-slate-800">Detected Students</h2>
+              <span className="text-xs text-slate-500 bg-slate-50 px-2 py-1 rounded-md font-medium border border-slate-100">{students.length} Active</span>
            </div>
            
            <div className="overflow-y-auto flex-1 p-4">
