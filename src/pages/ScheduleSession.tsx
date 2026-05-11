@@ -3,20 +3,25 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { Clock, MapPin, Calendar, FileText } from 'lucide-react';
 import { supabase } from '../supabaseClient';
+import { useAuth } from '../contexts/AuthContext';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 
 export const ScheduleSession = () => {
   const { register, handleSubmit, reset, formState: { errors } } = useForm();
   const [isLoading, setIsLoading] = useState(false);
+  const { user } = useAuth();
 
   const onSubmit = async (data: any) => {
+    if (!user) return;
     setIsLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
-
       const { error } = await supabase.from('sessions').insert([{
-        ...data,
+        name: data.name,
+        date: data.date,
+        room: data.room,
+        startTime: data.startTime,
+        timeLimit: parseInt(data.timeLimit, 10),
+        description: data.description || null,
         user_id: user.id,
         status: 'upcoming'
       }]);
@@ -25,9 +30,9 @@ export const ScheduleSession = () => {
 
       toast.success('Session scheduled successfully');
       reset();
-    } catch (error) {
-      console.error(error);
-      toast.error('Failed to schedule session');
+    } catch (error: any) {
+      console.error('Session insert error:', error);
+      toast.error(error?.message || 'Failed to schedule session');
     } finally {
       setIsLoading(false);
     }
