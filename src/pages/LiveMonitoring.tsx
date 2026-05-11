@@ -11,6 +11,7 @@ export const LiveMonitoring = () => {
   const navigate = useNavigate();
 
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [studentReports, setStudentReports] = useState<Record<string, any>>({});
   const [session, setSession] = useState<any>(null);
   const sessionRef = useRef<any>(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -99,10 +100,21 @@ export const LiveMonitoring = () => {
     const fetchAlerts = async () => {
       if (isPausedRef.current) return;
       try {
-        const { data } = await supabase.from('alerts').select('*').eq('session_id', sessionId).order('timestamp', { ascending: false });
-        if (data) setAlerts(data);
+        const [{ data: alertData }, { data: reportData }] = await Promise.all([
+          supabase.from('alerts').select('*').eq('session_id', sessionId).order('timestamp', { ascending: false }),
+          supabase.from('student_reports').select('*').eq('session_id', sessionId),
+        ]);
+        if (alertData) setAlerts(alertData);
+        if (reportData) {
+          setStudentReports(
+            reportData.reduce((acc: Record<string, any>, r: any) => {
+              acc[r.student_id] = r;
+              return acc;
+            }, {})
+          );
+        }
       } catch (e) {
-         console.error(e);
+        console.error(e);
       }
     };
 
@@ -110,7 +122,21 @@ export const LiveMonitoring = () => {
 
     const interval = setInterval(fetchAlerts, 5000);
 
-    // WebRTC Setup using Supabase Realtime for Signaling
+    // Phase 1: send assign-session to RPi so it calls _run_session()
+    const deviceId = 'pi-edge-001';
+    const deviceCmdChannel = supabase.channel(`device_cmd_${deviceId}`);
+    deviceCmdChannel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        deviceCmdChannel.send({
+          type: 'broadcast',
+          event: 'assign-session',
+          payload: { sessionId },
+        });
+        console.log(`[Device] assign-session sent to device_cmd_${deviceId}`);
+      }
+    });
+
+    // Phase 2: WebRTC — RPi waits for viewer-ready after assign-session
     const webrtcChannel = supabase.channel(`webrtc_${sessionId}`);
     
     const initWebRTC = async () => {
@@ -238,6 +264,7 @@ export const LiveMonitoring = () => {
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
       }
+      supabase.removeChannel(deviceCmdChannel);
       supabase.removeChannel(webrtcChannel);
     };
   }, [sessionId, navigate]);
@@ -271,20 +298,37 @@ export const LiveMonitoring = () => {
     return acc;
   }, {} as Record<string, any>);
 
-  let uniqueStudentIds = Array.from(new Set(alerts.map(a => a.studentId)));
-  if (uniqueStudentIds.length === 0) {
-      uniqueStudentIds = Array.from({length: 5}, (_, i) => `${i + 1}`);
-  }
+  // Merge student IDs from both alerts and student_reports (real data only — no dummies)
+  const uniqueStudentIds = Array.from(new Set([
+    ...alerts.map(a => a.studentId),
+    ...Object.keys(studentReports),
+  ]));
 
   const students = uniqueStudentIds.map(studentId => {
+    const studentAlerts = alerts.filter(a => a.studentId === studentId);
     const latestAlert = latestAlertsByStudent[studentId];
-    const isRecent = latestAlert && (new Date().getTime() - new Date(latestAlert.timestamp).getTime() < 15000); // Consider normal if older than 15s
-    
+    const report = studentReports[studentId];
+
+    const avgRisk = studentAlerts.length > 0
+      ? studentAlerts.reduce((sum, a) => sum + (a.riskScore || 0), 0) / studentAlerts.length
+      : 0;
+    const maxRisk = studentAlerts.length > 0
+      ? Math.max(...studentAlerts.map(a => a.riskScore || 0))
+      : 0;
+    const finalLabel = maxRisk >= 0.75 ? 'HIGH RISK' : maxRisk >= 0.4 ? 'SUSPICIOUS' : 'NORMAL';
+
     return {
       studentId,
-      status: isRecent ? (latestAlert.headStatus || latestAlert.details || latestAlert.behaviorType) : 'Normal',
-      riskScore: isRecent ? latestAlert.riskScore : 0,
-      timestamp: isRecent ? latestAlert.timestamp : null,
+      studentName: latestAlert?.studentName || report?.student_id ? `Student ${report?.student_id}` : `Student ${studentId}`,
+      headStatus: latestAlert?.headStatus || 'FORWARD',
+      behaviorType: latestAlert?.behaviorType || null,
+      riskScore: latestAlert?.riskScore || 0,
+      avgRisk: report ? Number(report.avg_risk) : avgRisk,
+      maxRisk: report ? Number(report.max_risk) : maxRisk,
+      alertCount: report ? report.samples : studentAlerts.length,
+      finalLabel: report?.final_label || finalLabel,
+      timestamp: latestAlert?.timestamp || null,
+      imageUrl: report?.image_url || latestAlert?.frameUrl || null,
     };
   });
 
@@ -389,35 +433,80 @@ export const LiveMonitoring = () => {
            </div>
            
            <div className="overflow-y-auto flex-1 p-4">
-             <div className="flex flex-col gap-3">
-               {students.map(student => (
-                 <div key={student.studentId} className="p-3 border border-slate-100 rounded-[12px] bg-white shadow-sm flex items-center justify-between transition-colors">
-                   <div className="flex items-center gap-3">
-                     <div className="w-10 h-10 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center font-semibold text-slate-600 shrink-0">
-                        {student.studentId && typeof student.studentId === 'string' ? student.studentId.replace('Student_', 'S') : student.studentId}
-                     </div>
-                     <div className="min-w-0 pr-2">
-                        <p className="text-sm font-semibold text-slate-800 truncate">{student.studentId}</p>
-                        <p className="text-xs mt-0.5 truncate">
-                           <span className="text-slate-500 font-medium">Status: </span>
-                           <span className={`font-semibold ${student.status !== 'Normal' ? 'text-rose-600' : 'text-emerald-600'}`}>
-                             {student.status}
-                           </span>
-                        </p>
-                     </div>
-                   </div>
-                   {student.status !== 'Normal' && (
-                     <div className={`shrink-0 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                         student.riskScore >= 0.75 ? 'text-red-700 bg-red-50 border-red-200' : 
-                         student.riskScore >= 0.25 ? 'text-amber-700 bg-amber-50 border-amber-200' :
-                         'text-blue-700 bg-blue-50 border-blue-200'
-                     }`}>
-                        {(student.riskScore * 100).toFixed(0)}% Risk
-                     </div>
-                   )}
+             {students.length === 0 ? (
+               <div className="flex flex-col items-center justify-center h-full py-12 text-center">
+                 <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                   <Activity className="w-5 h-5 text-slate-400" />
                  </div>
-               ))}
+                 <p className="text-sm font-medium text-slate-500">Waiting for edge device</p>
+                 <p className="text-xs text-slate-400 mt-1">Students will appear once the RPi starts detecting</p>
+               </div>
+             ) : (
+             <div className="flex flex-col gap-3">
+               {students.map(student => {
+                 const labelColor =
+                   student.finalLabel === 'HIGH RISK' ? 'bg-red-50 text-red-700 border-red-200' :
+                   student.finalLabel === 'SUSPICIOUS' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                   'bg-emerald-50 text-emerald-700 border-emerald-200';
+
+                 const headStatusColor =
+                   student.headStatus === 'FORWARD' ? 'text-emerald-600' : 'text-amber-600';
+
+                 return (
+                   <div key={student.studentId} className="p-3 border border-slate-100 rounded-[12px] bg-white shadow-sm flex flex-col gap-2.5 transition-colors">
+                     {/* Top row: avatar + name + label */}
+                     <div className="flex items-center justify-between gap-2">
+                       <div className="flex items-center gap-2.5 min-w-0">
+                         {student.imageUrl ? (
+                           <img
+                             src={student.imageUrl}
+                             alt={student.studentName}
+                             className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0"
+                           />
+                         ) : (
+                           <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-500 text-sm shrink-0">
+                             {student.studentId}
+                           </div>
+                         )}
+                         <div className="min-w-0">
+                           <p className="text-sm font-semibold text-slate-800 truncate">{student.studentName}</p>
+                           <p className={`text-xs font-medium ${headStatusColor}`}>Head: {student.headStatus}</p>
+                         </div>
+                       </div>
+                       <span className={`shrink-0 text-xs font-bold px-2 py-0.5 rounded-md border ${labelColor}`}>
+                         {student.finalLabel}
+                       </span>
+                     </div>
+
+                     {/* Stats row */}
+                     <div className="grid grid-cols-3 gap-1.5 text-center">
+                       <div className="bg-slate-50 rounded-lg py-1.5 border border-slate-100">
+                         <p className="text-xs text-slate-400 leading-none mb-0.5">Alerts</p>
+                         <p className="text-sm font-bold text-slate-700">{student.alertCount}</p>
+                       </div>
+                       <div className="bg-slate-50 rounded-lg py-1.5 border border-slate-100">
+                         <p className="text-xs text-slate-400 leading-none mb-0.5">Avg Risk</p>
+                         <p className="text-sm font-bold text-slate-700">{(student.avgRisk * 100).toFixed(0)}%</p>
+                       </div>
+                       <div className={`rounded-lg py-1.5 border ${student.maxRisk >= 0.75 ? 'bg-red-50 border-red-100' : student.maxRisk >= 0.4 ? 'bg-amber-50 border-amber-100' : 'bg-slate-50 border-slate-100'}`}>
+                         <p className="text-xs text-slate-400 leading-none mb-0.5">Max Risk</p>
+                         <p className={`text-sm font-bold ${student.maxRisk >= 0.75 ? 'text-red-700' : student.maxRisk >= 0.4 ? 'text-amber-700' : 'text-slate-700'}`}>
+                           {(student.maxRisk * 100).toFixed(0)}%
+                         </p>
+                       </div>
+                     </div>
+
+                     {/* Latest behavior */}
+                     {student.behaviorType && (
+                       <p className="text-xs text-slate-400 truncate">
+                         Latest: <span className="text-slate-600 font-medium">{student.behaviorType.replace(/_/g, ' ')}</span>
+                       </p>
+                     )}
+                   </div>
+                 );
+               })}
              </div>
+             )}
            </div>
         </div>
       </div>
