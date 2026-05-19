@@ -254,6 +254,8 @@ export const SessionRecords = () => {
                                     <div className="flex gap-2 text-[10px] text-slate-400 mt-0.5">
                                       <span>Avg {(Number(report.avg_risk) * 100).toFixed(0)}%</span>
                                       <span>&middot;</span>
+                                      <span className="text-red-400">Max {(Number(report.max_risk) * 100).toFixed(0)}%</span>
+                                      <span>&middot;</span>
                                       <span>{report.samples} samples</span>
                                     </div>
                                   </div>
