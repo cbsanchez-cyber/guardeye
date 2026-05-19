@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, FileSpreadsheet, CheckCircle2, Image as ImageIcon, Trash2, Users, Activity, AlertTriangle } from 'lucide-react';
+import { ChevronRight, FileSpreadsheet, CheckCircle2, Image as ImageIcon, Trash2, Users, Activity, AlertTriangle, X } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -12,6 +12,7 @@ export const SessionRecords = () => {
   const [sessionReports, setSessionReports] = useState<any[]>([]);
   const [sessionEventLogs, setSessionEventLogs] = useState<any[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [lightbox, setLightbox] = useState<{ url: string; studentId: string | number } | null>(null);
 
   useEffect(() => {
     fetchSessions();
@@ -241,7 +242,8 @@ export const SessionRecords = () => {
                                     <img
                                       src={report.image_url}
                                       alt={`Student ${report.student_id}`}
-                                      className={`w-16 h-16 rounded-full object-cover border-2 ${ringColor}`}
+                                      className={`w-16 h-16 rounded-full object-cover border-2 ${ringColor} cursor-pointer hover:opacity-80 transition-opacity`}
+                                      onClick={() => setLightbox({ url: report.image_url, studentId: report.student_id })}
                                     />
                                   ) : (
                                     <div className={`w-16 h-16 rounded-full bg-slate-50 border-2 ${ringColor} flex items-center justify-center font-bold text-slate-600 text-lg`}>
@@ -324,6 +326,34 @@ export const SessionRecords = () => {
           ))}
         </ul>
       </div>
+
+      {/* Image lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+          onClick={() => setLightbox(null)}
+        >
+          <div
+            className="relative bg-white rounded-2xl shadow-2xl p-4 flex flex-col items-center gap-3 max-w-sm w-full mx-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              title="Close"
+              className="absolute top-3 right-3 p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+              onClick={() => setLightbox(null)}
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <p className="text-sm font-semibold text-slate-700">Student {lightbox.studentId}</p>
+            <img
+              src={lightbox.url}
+              alt={`Student ${lightbox.studentId}`}
+              className="w-full max-h-80 object-contain rounded-xl border border-slate-100"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
